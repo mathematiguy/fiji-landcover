@@ -7,20 +7,21 @@ GID ?= $(shell id -g)
 DOCKER_ARGS ?= 
 GIT_TAG ?= $(shell git log --oneline | head -n1 | awk '{print $$1}')
 
-JUPYTER_PASSWORD ?= jupyter
-JUPYTER_PORT ?= 8888
-.PHONY: jupyter
-jupyter: UID=root
-jupyter: GID=root
-jupyter: DOCKER_ARGS=-u $(UID):$(GID) --rm -it -p $(JUPYTER_PORT):$(JUPYTER_PORT) -e NB_USER=$$USER -e NB_UID=$(UID) -e NB_GID=$(GID)
-jupyter:
-	$(RUN) jupyter lab \
-		--allow-root \
-		--port $(JUPYTER_PORT) \
-		--ip 0.0.0.0 \
-		--NotebookApp.password=$(shell $(RUN) \
-			python3 -c \
-			"from IPython.lib import passwd; print(passwd('$(JUPYTER_PASSWORD)'))")
+.PHONY: data notebooks daemon docker docker-push docker-pull enter enter-root
+
+data: data/fiji_vector.shp
+
+data/fiji_vector.shp: data/fiji_vector.zip
+	unzip $< -d $(dir $@)
+
+notebooks: $(shell ls -d notebooks/*.Rmd | sed 's/.Rmd/.html/g')
+
+notebooks/%.html: notebooks/%.Rmd
+	$(RUN) Rscript -e 'rmarkdown::render("$<")'
+
+daemon: DOCKER_ARGS= -dit --rm -e DISPLAY=$$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix:ro --name="rdev"
+daemon:
+	$(RUN) R
 
 .PHONY: docker
 docker:
@@ -48,14 +49,3 @@ enter-root: UID=root
 enter-root: GID=root
 enter-root:
 	$(RUN) bash
-
-.PHONY: inspect-variables
-inspect-variables:
-	@echo DOCKER_REGISTRY: $(DOCKER_REGISTRY)
-	@echo IMAGE_NAME:      $(IMAGE_NAME)
-	@echo IMAGE:           $(IMAGE)
-	@echo RUN:             $(RUN)
-	@echo UID:             $(UID)
-	@echo GID:             $(GID)
-	@echo DOCKER_ARGS:     $(DOCKER_ARGS)
-	@echo GIT_TAG:         $(GIT_TAG)
