@@ -1,0 +1,160 @@
+---
+title: "Litia's Notebook on Land Accounts for Fiji"
+author: "Litia Kurisaqila-Mate"
+date: "3/27/2018"
+prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+##INTRODUCTION
+This notebook was made for the purpose of documenting how to Load and manipulate Land data to eventually derive a Land Cover/Use change matrix.
+
+To Begin:
+##STEP 1: Activating functions within R packages
+Activate the functions in the packages that you've already installed, that are necessary for processing dataframes and spatial data. You need to type in library, tab it and enter the name of the fuction you are trying to activate.
+```{r}
+library(tidyverse)
+library(sf)
+library(reshape2)
+library(leaflet)
+library(rgdal)
+library(sp)
+library(ggvis)
+library(sunburstR)
+library(RColorBrewer)
+```
+##STEP 2: Read in the shapefile 
+You will do this by first assigning the 'variable' you are trying to determine (produce) a name. Then you will run the function 'st_read', tab it and type in the file path (one depth in) as well as the file name.
+
+Things to note:
+- you will face alot of Errors if you do not work in a project
+-if you work in a notebook the working directory will be set to the location of the note book and over-ride the working directory previously set by the project.
+- be careful especially if you're not working within a project as certain file paths may differ and the results would be an error.
+
+```{r}
+regions <- st_read("../FIJI/FIJI_admin.shp")
+
+```
+##STEP 3: Set the CRS (Cordinate Referncing System) to the EPSG Cordinates for Fiji which is 3460
+```{r}
+#Telling are the Cordinates to refer to in this file 3460 - FIJI - does not necessarily reproject or change the data
+regions <- st_set_crs(regions,3460)
+#Dave's code for converting the data's colunmn names to lower case (form he finds easier to work with)
+names(regions) <- str_to_lower(names(regions))
+#Dave has opened up the regions folder and selected the following columns with the names in the brackets (changed to lower caps in previous code)
+regions <- regions %>% 
+  select(uid, id_0, name_0, id_1, name_1, name_2)
+```
+
+
+The shape file has now been read in.
+
+##STEP 4: Map Fiji regions with the Dateline Wrapped
+To avoid a long line appearing across the map we need to wrap the Internatonal dateline on which the country lies.To do this you will need to convert the 'sf' object to 'sp'object using 'spTransform' with a +lon_wrap=180`argument to convert the CRS.
+```{r}
+regions_4326 <- st_as_sf(sp::spTransform(as(regions, "Spatial"), CRS("+init=epsg:4326 +lon_wrap=180")))
+#Leaflet helps to put the data transformed onto a map and enables you to visualose the polygons column as a whole and label the regions using divisions with popup names of the provinces.
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(data=regions_4326, popup=~name_2, label=~name_1)
+```
+
+##STEP 5:Read in Landcover (Landuse) ShapeFile
+Same process as step 2. But now we are reading in another shapefile which we will further build on (i.e create new column or variables from old variables and assign these new variables a group name to be known by.) This is where we begin the process of unpacking the data and organise it in a way that is tidy and easy to read and analyse.
+
+```{r}
+landcover_shp <- st_read("../Landuse Data_Shape/Landuse.shp")
+landcover_shp <- st_set_crs(landcover_shp,3460)
+names(landcover_shp) <- str_to_lower(names(landcover_shp))
+landcover_shp <- select(landcover_shp, id, landcover_class=d_landuse_, area_ha, geometry)
+
+names(landcover_shp)
+```
+
+#STEP 6: Convert the shapefile into a dataframe
+This is an important element in unpacking the data. Once you convert the shapefile, drop the geometry column to make the table smaller and run the table faster.
+
+```{r}
+landcover_df <- 
+  landcover_shp %>% 
+    as.data.frame(.) %>% 
+    select(-geometry)
+```
+
+#STEP 7: Calculate LandCover by summarising totals.
+Tell R to calculate the land area fro each of the polygons and group them by particular  class.
+
+```{r}
+landcover_summary <-
+  landcover_df %>% 
+    select(landcover_class, area_ha) %>% 
+    group_by(landcover_class) %>% 
+    summarise(area_ha=sum(area_ha))
+
+landcover_summary
+```
+
+#STEP 7: Concorading the class to a particular prefernce (SEEA class)
+ Here we will concord the class to SEEA class and have the area in hectares by SEEA class.
+ First we need to read in the csv file and then'inner_join' the two classes (two excel columns).
+ 
+ 
+```{r}
+landcover_conc <- read_csv("../fiji_landcover_concordance.csv")
+landcover_fiji_summary <- left_join(landcover_summary, landcover_conc, by="landcover_class")
+  
+landcover_seea_summary <-
+  landcover_fiji_summary %>% 
+  group_by(seea_cf_class) %>% 
+  summarise(area_ha=sum(area_ha))
+
+```
+#STEP 8: Visualise SEEA Landcover (optional)
+You can now graph or visualise the above by SEEA landcover class you can do this by using the packages ggplot tp run the above produced table.
+
+```{r}
+ggplot(landcover_seea_summary) +
+  geom_col(aes(x=reorder(seea_cf_class, area_ha),y=area_ha, fill=seea_cf_class), show.legend=F) +
+  coord_flip()
+```
+#STEP 9: Creating a synthetic data set
+Because you only have one years data set for landcover, you have to create a set of synthetic data that will represent a second set of data to be able to derive a land cover change matrix.
+```{r}
+landcover_shp <- st_read("../Landuse Data_Shape/Landuse.shp")
+
+landcover_shp %>% 
+  select(-geometry)
+
+```
+#STEP 10: Creating the new data set through shuffling
+In the above block we have loaded the original data set which we will reshuffle in this step to form a new data set that will represent the 2nd data set that we are missing. we will assign this data set to a variable name: landcover_clean to mark that it has been shffled, and then we will rename both data sets, data set one being landuse_old and data set two being landus_new. we will then read in the SEEA concordance again for both data sets and rename them seea_old for data set one and seea_new for data set two. Then finally we will select the relevant columns that we need for the matrix from the new combined dataset.
+```{r}
+shuffle <- function(x) {
+  #' shuffle the values of a given vector
+  x[sample(1:length(x), length(x), replace = FALSE)]
+}
+
+land_conc <- read_csv("../data/")
+
+landcover_clean <- landcover_shp %>% 
+  rename(landuse_old = d_Landuse_) %>% 
+  st_cast("POLYGON") %>% 
+  mutate(Area_m2 = as.numeric(st_area(geometry))) %>%
+  mutate(Area_sqkm = Area_m2 * 1e-6,
+         Area_ha = Area_m2 * 1e-4,
+         Area_ac = Area_m2 * 2.47105e-4) %>% 
+  mutate(landuse_new = shuffle(landuse_old)) %>% 
+  inner_join(land_conc, by = c(landuse_old = "landcover_class")) %>% 
+  rename(seea_old = seea_cf_class) %>% 
+  inner_join(land_conc, by = c(landuse_new = "landcover_class")) %>% 
+  rename(seea_new = seea_cf_class) %>% 
+  select(landuse_old, landuse_new, seea_old, seea_new, Area_m2, 
+         Area_ac, Area_ha, Area_sqkm)
+
+landcover_clean
+```
+
+```{r}
+land_conc
+```
